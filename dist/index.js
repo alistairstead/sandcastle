@@ -2461,20 +2461,28 @@ var claudeHostSessionPath = (cwd, id, projectsDir) => {
   return join(base, encodeProjectPath(cwd), `${id}.jsonl`);
 };
 var claudeSandboxSessionPath = (cwd, id, projectsDir) => posix.join(projectsDir, encodeProjectPath(cwd), `${id}.jsonl`);
-var claudeSubagentsDirInSandbox = (cwd, id, projectsDir) => posix.join(projectsDir, encodeProjectPath(cwd), id, "subagents");
 var claudeSubagentsDirOnHost = (cwd, id, projectsDir) => {
   const base = projectsDir ?? join(process.env.HOME ?? "~", ".claude", "projects");
   return join(base, encodeProjectPath(cwd), id, "subagents");
 };
-var listClaudeSubagentSessionsInSandbox = async (cwd, id, handle, sandboxProjectsDir) => {
-  const dir = claudeSubagentsDirInSandbox(cwd, id, sandboxProjectsDir);
+var listClaudeSubagentSessionsInDir = async (subagentsDir, handle) => {
   const result = await handle.exec(
-    `find ${JSON.stringify(dir)} -type f -name ${JSON.stringify("agent-*.jsonl")} 2>/dev/null`
+    `find ${JSON.stringify(subagentsDir)} -type f -name ${JSON.stringify("agent-*.jsonl")} 2>/dev/null`
   );
   if (result.exitCode !== 0) return [];
   const stdout = result.stdout.trim();
   if (stdout === "") return [];
   return stdout.split("\n").filter((line) => line !== "");
+};
+var locateClaudeSandboxSession = async (id, handle, sandboxProjectsDir) => {
+  const result = await handle.exec(
+    `find ${JSON.stringify(sandboxProjectsDir)} -type f -name ${JSON.stringify(`${id}.jsonl`)} -print -quit`
+  );
+  const path2 = result.stdout.trim().split("\n")[0];
+  if (result.exitCode !== 0 || !path2) {
+    throw new Error(`session ${id} not found under ${sandboxProjectsDir}`);
+  }
+  return path2;
 };
 var findClaudeSessionOnHost = async (id, projectsDir) => {
   const root = projectsDir ?? join(process.env.HOME ?? "~", ".claude", "projects");
@@ -2807,23 +2815,22 @@ var makeClaudeSessionStorage = (options) => {
       return readFile(path2, "utf-8");
     },
     captureToHost: async ({ hostCwd, sandboxCwd, sessionId, handle }) => {
+      const mainSandboxPath = await locateClaudeSandboxSession(
+        sessionId,
+        handle,
+        sandboxProjectsDir
+      );
       await copyClaudeSessionFile({
         handle,
-        sourcePath: claudeSandboxSessionPath(
-          sandboxCwd,
-          sessionId,
-          sandboxProjectsDir
-        ),
+        sourcePath: mainSandboxPath,
         fromCwd: sandboxCwd,
         toCwd: hostCwd,
         destPath: claudeHostSessionPath(hostCwd, sessionId, hostProjectsDir),
         tag: "claude-cap"
       });
-      const subagentSandboxPaths = await listClaudeSubagentSessionsInSandbox(
-        sandboxCwd,
-        sessionId,
-        handle,
-        sandboxProjectsDir
+      const subagentSandboxPaths = await listClaudeSubagentSessionsInDir(
+        posix.join(posix.dirname(mainSandboxPath), sessionId, "subagents"),
+        handle
       );
       const hostSubagentsDir = claudeSubagentsDirOnHost(
         hostCwd,
