@@ -135,7 +135,22 @@ const startBindMountSandbox = (
       const rawMounts = [
         {
           hostPath: options.worktreeOrRepoPath,
-          sandboxPath: options.repoDir,
+          // Identity-mount the worktree at its host-identical path on POSIX
+          // hosts. The shared .git is already mounted host-identical (see
+          // resolveGitMounts), so matching the worktree path makes every git
+          // link resolve on both host and container. Otherwise in-container
+          // `git worktree repair` rewrites the shared admin gitdir to the
+          // container-only path (options.repoDir / SANDBOX_REPO_DIR), which is
+          // invalid on the host, and a host-side `git worktree prune` then
+          // deletes a live worktree's admin dir — mutually killing concurrent
+          // runs. Windows keeps options.repoDir: a `C:\…` host path is not a
+          // valid Linux container mount target. The docker/podman provider
+          // derives the container workdir and handle.worktreePath from this
+          // sandboxPath, so safe.directory and the agent cwd follow.
+          sandboxPath:
+            process.platform === "win32"
+              ? options.repoDir
+              : options.worktreeOrRepoPath,
         },
         ...options.gitMounts,
       ];
