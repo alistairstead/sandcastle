@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { Effect_exports, resolveUserMounts, processFileMountParents, defaultImageName, registerShutdown, DockerError, formatVolumeMount } from './chunk-S6RUO33U.js';
+import { Effect_exports, resolveUserMounts, processFileMountParents, defaultImageName, registerShutdown, DockerError, formatVolumeMount } from './chunk-P7OFU6NA.js';
 import { createBindMountSandboxProvider } from './chunk-BIWNFKGV.js';
 import { MAX_TAIL_CHARS, BoundedTail } from './chunk-NGBM7T3E.js';
 import { execFile, execFileSync, spawn } from 'child_process';
@@ -358,5 +358,5 @@ var checkImageUid = (imageName, expectedUid) => new Promise((resolve2, reject) =
 });
 
 export { buildImage, docker, removeImage };
-//# sourceMappingURL=chunk-KO7L6OYW.js.map
-//# sourceMappingURL=chunk-KO7L6OYW.js.map
+//# sourceMappingURL=chunk-XPUZKMEF.js.map
+//# sourceMappingURL=chunk-XPUZKMEF.js.map

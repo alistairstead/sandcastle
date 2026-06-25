@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
-import { resolveUserMounts, processFileMountParents, formatVolumeMount, defaultImageName, registerShutdown } from '../chunk-S6RUO33U.js';
-export { defaultImageName } from '../chunk-S6RUO33U.js';
+import { resolveUserMounts, processFileMountParents, formatVolumeMount, defaultImageName, registerShutdown } from '../chunk-P7OFU6NA.js';
+export { defaultImageName } from '../chunk-P7OFU6NA.js';
 import { createBindMountSandboxProvider } from '../chunk-BIWNFKGV.js';
 import { MAX_TAIL_CHARS, BoundedTail } from '../chunk-NGBM7T3E.js';
 import { execFile, execFileSync, spawn } from 'child_process';
