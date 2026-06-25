@@ -2,8 +2,8 @@
 "@ai-hero/sandcastle": patch
 ---
 
-Serialize concurrent git worktree mutations to stop parallel runs deleting each other's worktrees.
+Stop concurrent bind-mount runs from deleting each other's worktrees.
 
-`git worktree` add/remove/prune mutate the shared `.git/worktrees/` admin tree and are not safe to run concurrently on one repo. With parallel `createSandbox()` callers (or a dispose racing a sibling's create), one caller's `pruneStale` treats another's in-flight `git worktree add` as stale and removes its admin dir, breaking that sibling mid-run with `fatal: not a git repository: .git/worktrees/<name>`. Fixes mattpocock/sandcastle#849, related to #642.
+With Docker/Podman, the worktree is bind-mounted at the container repo dir (e.g. `/home/agent/workspace`) while the shared `.git` is mounted host-identical. Each worktree's admin back-pointer (`.git/worktrees/<name>/gitdir`) therefore resolves to a host path that is NOT present in any *sibling* box's mount namespace, so `git worktree list` inside any box marks every sibling `prunable`. A `git worktree prune` run inside one box (directly or via tooling) then deletes all siblings' admin dirs from the shared `.git`, breaking live runs with `fatal: not a git repository: .git/worktrees/<name>` (mattpocock/sandcastle#849, #642).
 
-`WorktreeManager.create`, `remove`, and `pruneStale` now run under a single in-process permit. The guarded git ops are milliseconds long; the expensive `onSandboxReady` hooks run outside the lock, so sandbox-setup concurrency is preserved.
+Fix: create worktrees born-locked (`git worktree add --lock`); `git worktree prune` skips locked worktrees, so siblings survive regardless of what triggers the prune. Teardown (`remove`) now passes `--force` twice to override the lock. Worktree-mutating ops (`create`/`remove`/`pruneStale`) are also serialized through a single in-process permit to close the host-side birth-time `fs.remove` TOCTOU.

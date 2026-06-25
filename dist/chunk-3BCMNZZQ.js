@@ -25281,6 +25281,10 @@ var create = (repoDir, opts) => Effect_exports.gen(function* () {
         } else {
           yield* fastForwardFromOrigin(collision.path, branch);
         }
+        yield* execGit(
+          ["worktree", "lock", collision.path],
+          repoDir
+        ).pipe(Effect_exports.catchAll(() => Effect_exports.void));
         return { path: normalize(collision.path), branch };
       }
       yield* Effect_exports.fail(
@@ -25290,7 +25294,7 @@ var create = (repoDir, opts) => Effect_exports.gen(function* () {
       );
     }
     yield* execGit(
-      [...NO_CONFIG_LOCK_FLAGS, "worktree", "add", worktreePath, branch],
+      [...NO_CONFIG_LOCK_FLAGS, "worktree", "add", "--lock", worktreePath, branch],
       repoDir
     ).pipe(
       Effect_exports.catchAll((e) => {
@@ -25300,6 +25304,7 @@ var create = (repoDir, opts) => Effect_exports.gen(function* () {
               ...NO_CONFIG_LOCK_FLAGS,
               "worktree",
               "add",
+              "--lock",
               "-b",
               branch,
               worktreePath,
@@ -25317,6 +25322,7 @@ var create = (repoDir, opts) => Effect_exports.gen(function* () {
         ...NO_CONFIG_LOCK_FLAGS,
         "worktree",
         "add",
+        "--lock",
         "-b",
         branch,
         worktreePath,
@@ -25354,10 +25360,10 @@ var hasUncommittedChanges = (worktreePath) => execGit(["status", "--porcelain"],
 );
 var remove8 = (worktreePath) => {
   const repoDir = join$1(worktreePath, "..", "..", "..");
-  return execGit(["worktree", "remove", "--force", worktreePath], repoDir).pipe(
-    Effect_exports.asVoid,
-    worktreeMutationLock.withPermits(1)
-  );
+  return execGit(
+    ["worktree", "remove", "--force", "--force", worktreePath],
+    repoDir
+  ).pipe(Effect_exports.asVoid, worktreeMutationLock.withPermits(1));
 };
 var pruneStale = (repoDir) => Effect_exports.gen(function* () {
   const fs = yield* FileSystem_exports.FileSystem;
@@ -27000,5 +27006,5 @@ var registerShutdown = (teardown) => {
 };
 
 export { AgentError, AgentIdleTimeoutError, BadArgument, BaseProto, ClackDisplay, Clock_exports, CommandExecutor2 as CommandExecutor, CommitPrototype2 as CommitPrototype, ConfigDirError, Context_exports, CwdError, Date$, Deferred_exports, Display, DockerError, Duration_exports, Effect_exports, ExitCode2 as ExitCode, Fiber_exports, FileDescriptor, FileDisplay, FileSystem, FileSystem_exports, FileTypeId, GenericTag, InitError, Int, Layer_exports, Literal2 as Literal, NumberFromString, Option_exports, Path2 as Path, PlatformWorker2 as PlatformWorker, PodmanError, ProcessId2 as ProcessId, ProcessTypeId2 as ProcessTypeId, PromptError, PromptExpansionTimeoutError, QuitException, Ref_exports, SANDBOX_REPO_DIR, SandboxConfig, SandboxFactory, SessionCaptureError, SilentDisplay, Size2 as Size, String$, SystemError, Terminal, TreeFormatter, TypeId28 as TypeId, WatchBackend, WatchEventCreate, WatchEventRemove, WatchEventUpdate, WorkerError, WorktreeDockerSandboxFactory, _await3 as _await, _void, acquireRelease2 as acquireRelease, addFinalizer2 as addFinalizer, addFinalizer3 as addFinalizer2, allLevels, allocate, append, appendAll, as7 as as, asVoid5 as asVoid, async2 as async, asyncScoped2 as asyncScoped, boolean, cached, catchAll3 as catchAll, catchAllCause3 as catchAllCause, catchIf2 as catchIf, catchSome2 as catchSome, catchTag2 as catchTag, catchTags2 as catchTags, combine, complete2 as complete, compose4 as compose, cons, constUndefined, constVoid, contains2 as contains, contextWithEffect2 as contextWithEffect, copyToWorktree, create, decode2 as decode, decodeUnknown3 as decodeUnknown, defaultImageName, die7 as die, dieMessage2 as dieMessage, drain3 as drain, drop, dual, effect, effectify2 as effectify, embedInput2 as embedInput, empty2 as empty, empty10 as empty2, ensuring3 as ensuring, ensuring6 as ensuring2, equals, error2 as error, every, fail3 as fail, fail10 as fail2, failCause7 as failCause, failSync4 as failSync, filter2 as filter, filter8 as filter2, filterMap2 as filterMap, filterOrDieMessage2 as filterOrDieMessage, findFirst2 as findFirst, findFirstIndex, findLast, flatMap, flatMap2, flatMap11 as flatMap3, flatMap16 as flatMap4, flatten8 as flatten, flatten15 as flatten2, fnUntraced2 as fnUntraced, forEach8 as forEach, forkDaemon2 as forkDaemon, formatVolumeMount, fromChannel4 as fromChannel, fromChannel3 as fromChannel2, fromEffect9 as fromEffect, fromIterable2 as fromIterable, fromIterable6 as fromIterable2, fromIterable7 as fromIterable3, fromNullable, fromString2 as fromString, gen3 as gen, generateTempBranchName, get7 as get, get11 as get2, get14 as get3, get15 as get4, getCurrentBranch, getOption2 as getOption, getOrElse, getOrThrow2 as getOrThrow, getSomes, globalValue, has4 as has, hasUncommittedChanges, hash, head, headNonEmpty, identity, ignore2 as ignore, int, interruptible4 as interruptible, is, isArray, isConfig2 as isConfig, isConfigError2 as isConfigError, isDone5 as isDone, isEffect2 as isEffect, isEmpty4 as isEmpty, isEmptyReadonlyArray, isMissingDataOnly2 as isMissingDataOnly, isNil, isNonEmptyReadonlyArray, isNone2 as isNone, isObject, isOption2 as isOption, isQuitException, isSome2 as isSome, isTagged, join, layerManager2 as layerManager, left2 as left, log4 as log, make4 as make, make57 as make10, make13 as make2, make16 as make3, make25 as make4, make42 as make5, make47 as make6, make54 as make7, make60 as make8, make53 as make9, makeExecutor2 as makeExecutor, makePlatform2 as makePlatform, makeRunMain, makeSandboxFromHandle, map2 as map, map3 as map2, map18 as map3, mapBoth5 as mapBoth, mapError4 as mapError, mapInput2 as mapInput, match2 as match, match3 as match2, match14 as match3, matchEffect3 as matchEffect, matchLeft, matchRight, merge, mergeAll6 as mergeAll, negate2 as negate, none2 as none, of, of3 as of2, orDie3 as orDie, orElse, orElse6 as orElse2, orElse12 as orElse3, orElseFail2 as orElseFail, patchGitMountsForWindows, pipe, pipeArguments, prepend, processFileMountParents, provide2 as provide, provide3 as provide2, provideMerge2 as provideMerge, provideService3 as provideService, provideServiceEffect2 as provideServiceEffect, pruneStale, reduce, reduceRight, registerShutdown, remove8 as remove, repeatN2 as repeatN, resolveCwd, resolveGitMounts, resolveUserMounts, right2 as right, round, run5 as run, runHostHooks, runSync, scoped3 as scoped, scoped4 as scoped2, serviceOption2 as serviceOption, set3 as set, some2 as some, some3 as some2, sort, span, splitAt, startSandbox, stdin2 as stdin, string, string2, succeed10 as succeed, succeed11 as succeed2, suspend4 as suspend, suspend9 as suspend2, symbol, symbol2, sync6 as sync, syncOut, taggedEnum, tailNonEmpty, take, tap4 as tap, timeout2 as timeout, toStringUnknown, transduce2 as transduce, tryPromise2 as tryPromise, try_2 as try_, unify2 as unify, uninterruptible2 as uninterruptible, unlessEffect2 as unlessEffect, unsafeDone, unsafeFromArray, unsafeGet, unsafeMakeLatch2 as unsafeMakeLatch, unsafeMakeSemaphore2 as unsafeMakeSemaphore, unwrap5 as unwrap, unwrapScoped7 as unwrapScoped, update3 as update, updateAndGet2 as updateAndGet, updateEffect2 as updateEffect, value2 as value, void_4 as void_, void_8 as void_2, when2 as when, when4 as when2, withMinimumLogLevel2 as withMinimumLogLevel, withSandboxLifecycle, write2 as write, zip6 as zip, zipLeft6 as zipLeft, zipRight6 as zipRight, zipWith8 as zipWith };
-//# sourceMappingURL=chunk-P7OFU6NA.js.map
-//# sourceMappingURL=chunk-P7OFU6NA.js.map
+//# sourceMappingURL=chunk-3BCMNZZQ.js.map
+//# sourceMappingURL=chunk-3BCMNZZQ.js.map
