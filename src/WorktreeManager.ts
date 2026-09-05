@@ -362,6 +362,11 @@ export const create = (
           } else {
             yield* fastForwardFromOrigin(collision.path, branch);
           }
+          // Ensure a reused worktree is locked too (born-locked covers fresh
+          // adds; reuse bypasses that). Best-effort: ignore "already locked".
+          yield* execGit(["worktree", "lock", collision.path], repoDir).pipe(
+            Effect.catchAll(() => Effect.void),
+          );
           // git reports forward slashes even on Windows; return a
           // platform-native path so downstream join/fs calls stay consistent.
           return { path: normalize(collision.path), branch };
@@ -377,8 +382,23 @@ export const create = (
           }),
         );
       }
+      // `--lock` makes the worktree born locked: with bind-mount providers the
+      // worktree is mounted at a container path (e.g. /home/agent/workspace)
+      // while the shared `.git` is mounted host-identical, so the admin
+      // back-pointer resolves to a path NOT present in any sibling's container.
+      // A `git worktree prune` run inside ANY concurrent box (or its tooling)
+      // would otherwise see every sibling as "gitdir points to non-existent
+      // location" and delete it from the shared `.git`, killing live runs
+      // (mattpocock/sandcastle#849). A locked worktree is skipped by prune.
       yield* execGit(
-        [...NO_CONFIG_LOCK_FLAGS, "worktree", "add", worktreePath, branch],
+        [
+          ...NO_CONFIG_LOCK_FLAGS,
+          "worktree",
+          "add",
+          "--lock",
+          worktreePath,
+          branch,
+        ],
         repoDir,
       ).pipe(
         Effect.catchAll((e) => {
@@ -388,6 +408,7 @@ export const create = (
                 ...NO_CONFIG_LOCK_FLAGS,
                 "worktree",
                 "add",
+                "--lock",
                 "-b",
                 branch,
                 worktreePath,
@@ -405,6 +426,7 @@ export const create = (
           ...NO_CONFIG_LOCK_FLAGS,
           "worktree",
           "add",
+          "--lock",
           "-b",
           branch,
           worktreePath,
@@ -467,10 +489,13 @@ export const remove = (
 ): Effect.Effect<void, WorktreeError> => {
   // Derive the main repo dir: worktreePath = <repoDir>/.sandcastle/worktrees/<name>
   const repoDir = join(worktreePath, "..", "..", "..");
-  return execGit(["worktree", "remove", "--force", worktreePath], repoDir).pipe(
-    Effect.asVoid,
-    worktreeMutationLock.withPermits(1),
-  );
+  // Worktrees are created `--lock`ed (see create); a single `--force` refuses a
+  // locked worktree ("use 'remove -f -f' to override or unlock first"), so pass
+  // it twice to tear down regardless of lock state.
+  return execGit(
+    ["worktree", "remove", "--force", "--force", worktreePath],
+    repoDir,
+  ).pipe(Effect.asVoid, worktreeMutationLock.withPermits(1));
 };
 
 /**
