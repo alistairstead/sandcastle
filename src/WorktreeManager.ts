@@ -499,6 +499,52 @@ export const remove = (
 };
 
 /**
+ * Unlocks worktrees that are locked but whose directory is genuinely gone, so
+ * the `git worktree prune` below can reclaim them.
+ *
+ * Worktrees are born locked (see `create`) so that a `git worktree prune` run
+ * from inside a sibling container cannot delete them. The cost is that prune
+ * also stops reclaiming worktrees that really are dead, e.g. after a crash
+ * deleted the directory. Unlocking those first restores that.
+ *
+ * Absence on disk is a safe signal *here* specifically because `pruneStale`
+ * runs host-side, where a live sibling's directory does exist. The failure this
+ * lock defends against is a raw `git worktree prune` inside a container, where
+ * siblings only *look* absent; that path never reaches this function.
+ */
+const unlockDeadWorktrees = (
+  repoDir: string,
+): Effect.Effect<void, WorktreeError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const list = yield* execGit(["worktree", "list", "--porcelain"], repoDir);
+
+    // Porcelain output is blank-line separated records, each starting with
+    // `worktree <path>`; a locked worktree carries a `locked` line.
+    for (const record of list.split("\n\n")) {
+      const lines = record.split("\n");
+      const path = lines
+        .find((line) => line.startsWith("worktree "))
+        ?.slice("worktree ".length)
+        .trim();
+      if (!path) continue;
+      if (
+        !lines.some((line) => line === "locked" || line.startsWith("locked "))
+      )
+        continue;
+
+      const stillThere = yield* fs
+        .exists(path)
+        .pipe(Effect.catchAll(() => Effect.succeed(true)));
+      if (stillThere) continue;
+
+      yield* execGit(["worktree", "unlock", path], repoDir).pipe(
+        Effect.catchAll(() => Effect.void),
+      );
+    }
+  });
+
+/**
  * Prunes stale git worktree metadata and removes orphaned directories under
  * `.sandcastle/worktrees/`.
  */
@@ -512,7 +558,10 @@ export const pruneStale = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
-    // Let git clean up metadata for worktrees whose directories are gone
+    // Let git clean up metadata for worktrees whose directories are gone.
+    // Born-locked worktrees are skipped by prune, so release the dead ones
+    // first; live siblings stay locked and survive.
+    yield* unlockDeadWorktrees(repoDir);
     yield* execGit(["worktree", "prune"], repoDir);
 
     const worktreesDir = join(repoDir, ".sandcastle", "worktrees");
