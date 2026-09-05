@@ -8,6 +8,23 @@ import { WorktreeError, WorktreeTimeoutError, withTimeout } from "./errors.js";
 const WORKTREE_TIMEOUT_MS = 30_000;
 
 /**
+ * Serializes every worktree-mutating git op (`create` → `git worktree add`,
+ * `remove` → `git worktree remove`, `pruneStale` → `git worktree prune` +
+ * orphan sweep) through a single in-process permit.
+ *
+ * `git worktree` add/remove/prune mutate the SHARED `.git/worktrees/` admin tree
+ * and are NOT safe to run concurrently on one repo. When parallel callers (e.g.
+ * several `createSandbox()` runs, or a dispose racing a sibling's create) overlap,
+ * one caller's `prune` treats another's in-flight `add` as stale and deletes its
+ * admin dir, breaking that sibling mid-run (mattpocock/sandcastle#849, #642).
+ *
+ * The guarded ops are milliseconds long, so serializing them costs ~zero
+ * wall-clock. The expensive onSandboxReady hooks (e.g. dependency install) run
+ * OUTSIDE this lock in createSandbox(), so concurrency there is preserved.
+ */
+const worktreeMutationLock = Effect.unsafeMakeSemaphore(1);
+
+/**
  * Git global flags that prevent `git worktree add -b` from writing upstream
  * tracking config to `.git/config`. Without these, a user's global
  * `branch.autoSetupMerge` or `push.autoSetupRemote` can cause a config write
@@ -425,6 +442,7 @@ export const create = (
           operation: "create",
         }),
     ),
+    worktreeMutationLock.withPermits(1),
   );
 
 /**
@@ -451,6 +469,7 @@ export const remove = (
   const repoDir = join(worktreePath, "..", "..", "..");
   return execGit(["worktree", "remove", "--force", worktreePath], repoDir).pipe(
     Effect.asVoid,
+    worktreeMutationLock.withPermits(1),
   );
 };
 
@@ -535,4 +554,5 @@ export const pruneStale = (
           operation: "prune",
         }),
     ),
+    worktreeMutationLock.withPermits(1),
   );
