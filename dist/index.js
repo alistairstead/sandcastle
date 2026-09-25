@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { NodeContext_exports, NodeFileSystem_exports, formatErrorMessage } from './chunk-JNJRL76J.js';
-import { Context_exports, CwdError, Effect_exports, resolveCwd, getCurrentBranch, generateTempBranchName, Layer_exports, FileDisplay, ClackDisplay, WorktreeDockerSandboxFactory, SandboxConfig, Display, pruneStale, create, copyToWorktree, runHostHooks, startSandbox, resolveGitMounts, patchGitMountsForWindows, SANDBOX_REPO_DIR, remove, makeSandboxFromHandle, syncOut, withSandboxLifecycle, hasUncommittedChanges, registerShutdown, SandboxFactory, PromptError, FileSystem_exports, SessionCaptureError, Clock_exports, Duration_exports, Option_exports, PromptExpansionTimeoutError, Deferred_exports, AgentError, Ref_exports, SilentDisplay, AgentIdleTimeoutError, Fiber_exports } from './chunk-XBH46AQY.js';
+import { Context_exports, CwdError, Effect_exports, resolveCwd, getCurrentBranch, generateTempBranchName, Layer_exports, FileDisplay, ClackDisplay, WorktreeDockerSandboxFactory, SandboxConfig, Display, pruneStale, create, copyToWorktree, runHostHooks, startSandbox, resolveGitMounts, patchGitMountsForWindows, SANDBOX_REPO_DIR, remove, makeSandboxFromHandle, syncOut, withSandboxLifecycle, hasUncommittedChanges, registerShutdown, SandboxFactory, PromptError, FileSystem_exports, SessionCaptureError, Clock_exports, Duration_exports, Option_exports, PromptExpansionTimeoutError, Deferred_exports, AgentError, Ref_exports, SilentDisplay, Fiber_exports, AgentIdleTimeoutError } from './chunk-XBH46AQY.js';
 export { createBindMountSandboxProvider, createIsolatedSandboxProvider } from './chunk-BIWNFKGV.js';
 import { noSandbox } from './chunk-62WN33RK.js';
 import './chunk-NGBM7T3E.js';
@@ -54,6 +54,30 @@ var agentStreamEmitterLayer = (onEvent) => Layer_exports.succeed(AgentStreamEmit
     }
   }) : () => Effect_exports.void
 });
+
+// src/IdleClock.ts
+var SUSPEND_THRESHOLD_MS = 1e4;
+var createIdleClock = ({
+  now = Date.now
+} = {}) => {
+  let last = now();
+  let idleMs = 0;
+  return {
+    reset: () => {
+      last = now();
+      idleMs = 0;
+    },
+    tick: () => {
+      const current = now();
+      const gap = current - last;
+      last = current;
+      if (gap > 0 && gap <= SUSPEND_THRESHOLD_MS) {
+        idleMs += gap;
+      }
+      return idleMs;
+    }
+  };
+};
 
 // src/PromptPreprocessor.ts
 var PROMPT_EXPANSION_TIMEOUT_MS = 3e4;
@@ -178,7 +202,8 @@ var TextDeltaBuffer = class {
 
 // src/Orchestrator.ts
 var IDLE_WARNING_INTERVAL_MS = 6e4;
-var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, completionTimeoutMs, completionSignals, onText, onToolCall, onRawLine, onIdleWarning, onCompletionTimeout, idleWarningIntervalMs = IDLE_WARNING_INTERVAL_MS, resumeSession, forkSession, signal) => Effect_exports.gen(function* () {
+var IDLE_TICK_MS = 1e3;
+var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, completionTimeoutMs, completionSignals, onText, onToolCall, onRawLine, onIdleWarning, onCompletionTimeout, idleWarningIntervalMs = IDLE_WARNING_INTERVAL_MS, resumeSession, forkSession, signal, now) => Effect_exports.gen(function* () {
   let resultText = "";
   let sessionId;
   let usage;
@@ -187,24 +212,34 @@ var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, com
   const completionTimeoutDeferred = yield* Deferred_exports.make();
   let timeoutFiber = null;
   let completionDetected = false;
-  let warningFiber = null;
-  let idleMinuteCounter = 0;
   const interruptFiber = (fiber) => {
     if (fiber !== null) Effect_exports.runFork(Fiber_exports.interrupt(fiber));
   };
-  const startWarningInterval = () => {
-    interruptFiber(warningFiber);
-    idleMinuteCounter = 0;
-    warningFiber = Effect_exports.runFork(
-      Effect_exports.gen(function* () {
-        while (true) {
-          yield* Effect_exports.sleep(Duration_exports.millis(idleWarningIntervalMs));
-          idleMinuteCounter++;
-          onIdleWarning(idleMinuteCounter);
+  const idleClock = createIdleClock({ now });
+  const idleTickMs = Math.min(IDLE_TICK_MS, idleTimeoutMs, idleWarningIntervalMs) / 4;
+  const startIdleLoop = () => Effect_exports.runFork(
+    Effect_exports.gen(function* () {
+      idleClock.reset();
+      let warnings = 0;
+      while (true) {
+        yield* Effect_exports.sleep(Duration_exports.millis(idleTickMs));
+        const idleMs = idleClock.tick();
+        if (idleMs >= idleTimeoutMs) {
+          return yield* Deferred_exports.fail(
+            timeoutSignal,
+            new AgentIdleTimeoutError({
+              message: `Agent idle for ${idleTimeoutMs / 1e3} seconds \u2014 no output received. Consider increasing the idle timeout with --idle-timeout.`,
+              timeoutMs: idleTimeoutMs
+            })
+          );
         }
-      })
-    );
-  };
+        while (idleMs >= (warnings + 1) * idleWarningIntervalMs) {
+          warnings += 1;
+          onIdleWarning(warnings);
+        }
+      }
+    })
+  );
   const resetTimer = () => {
     interruptFiber(timeoutFiber);
     if (completionDetected) {
@@ -220,19 +255,7 @@ var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, com
         })
       );
     } else {
-      timeoutFiber = Effect_exports.runFork(
-        Effect_exports.gen(function* () {
-          yield* Effect_exports.sleep(Duration_exports.millis(idleTimeoutMs));
-          yield* Deferred_exports.fail(
-            timeoutSignal,
-            new AgentIdleTimeoutError({
-              message: `Agent idle for ${idleTimeoutMs / 1e3} seconds \u2014 no output received. Consider increasing the idle timeout with --idle-timeout.`,
-              timeoutMs: idleTimeoutMs
-            })
-          );
-        })
-      );
-      startWarningInterval();
+      timeoutFiber = startIdleLoop();
     }
   };
   const abortDeferred = yield* Deferred_exports.make();
@@ -278,8 +301,6 @@ var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, com
         }
         if (!completionDetected && completionSignals.some((sig) => accumulatedOutput.includes(sig))) {
           completionDetected = true;
-          interruptFiber(warningFiber);
-          warningFiber = null;
         }
         resetTimer();
       },
@@ -308,8 +329,6 @@ ${errorDetail}`
       Effect_exports.sync(() => {
         interruptFiber(timeoutFiber);
         timeoutFiber = null;
-        interruptFiber(warningFiber);
-        warningFiber = null;
       })
     )
   );
@@ -327,8 +346,6 @@ ${errorDetail}`
         abortCleanup?.();
         interruptFiber(timeoutFiber);
         timeoutFiber = null;
-        interruptFiber(warningFiber);
-        warningFiber = null;
       })
     )
   );
@@ -471,7 +488,8 @@ var orchestrate = (options) => {
               options._idleWarningIntervalMs,
               iterationResumeSession,
               iterationForkSession,
-              options.signal
+              options.signal,
+              options._now
             );
             textBuffer.dispose();
             yield* display.status(label("Agent stopped"), "info");

@@ -2374,6 +2374,49 @@ describe("Orchestrator Display integration", () => {
     }
   }, 10_000);
 
+  it("does not count time the host spent suspended as idleness", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-idle-suspend-"));
+
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    // Silent for 450ms against a 300ms timeout, but the wall clock leaps an
+    // hour on every read between 100ms and 350ms, as it would across a host
+    // suspend. Only the ~200ms outside that window is awake idleness.
+    const { factoryLayer } = makeTestSandboxFactory(hostDir, (dir) =>
+      makeMockAgentLayer(dir, async () => {
+        await new Promise((resolve) => setTimeout(resolve, 450));
+        return "done";
+      }),
+    );
+
+    const start = Date.now();
+    let suspendedHours = 0;
+    const now = () => {
+      const elapsed = Date.now() - start;
+      if (elapsed > 100 && elapsed < 350) {
+        suspendedHours += 1;
+      }
+      return Date.now() + suspendedHours * 3_600_000;
+    };
+
+    const exitResult = await Effect.runPromise(
+      orchestrate({
+        _now: now,
+        hostRepoDir: hostDir,
+        idleTimeoutSeconds: 0.3,
+        iterations: 1,
+        prompt: "test",
+        provider: testProvider,
+      }).pipe(
+        Effect.provide(Layer.merge(factoryLayer, testDisplayLayer)),
+        Effect.exit,
+      ),
+    );
+
+    expect(exitResult._tag).toBe("Success");
+  }, 10_000);
+
   it("resets the idle timer on each text/tool_call output", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-idle-reset-"));
 

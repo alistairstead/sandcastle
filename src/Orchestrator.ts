@@ -1,5 +1,6 @@
 import { Deferred, Duration, Effect, Fiber } from "effect";
 import { AgentStreamEmitter } from "./AgentStreamEmitter.js";
+import { createIdleClock } from "./IdleClock.js";
 import { Display } from "./Display.js";
 import { preprocessPrompt } from "./PromptPreprocessor.js";
 import {
@@ -18,6 +19,9 @@ import { TextDeltaBuffer } from "./TextDeltaBuffer.js";
 export type { ParsedStreamEvent, IterationUsage } from "./AgentProvider.js";
 
 const IDLE_WARNING_INTERVAL_MS = 60_000;
+// Longest interval between idle-clock samples. Must stay well under
+// IdleClock's SUSPEND_THRESHOLD_MS, or every tick would read as a suspend.
+const IDLE_TICK_MS = 1_000;
 
 const invokeAgent = (
   sandbox: SandboxService,
@@ -36,6 +40,7 @@ const invokeAgent = (
   resumeSession?: string,
   forkSession?: boolean,
   signal?: AbortSignal,
+  now?: () => number,
 ): Effect.Effect<
   { result: string; sessionId?: string; usage?: IterationUsage },
   SandboxError
@@ -62,29 +67,44 @@ const invokeAgent = (
     let timeoutFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null;
     let completionDetected = false;
 
-    // Periodic idle warning state
-    let warningFiber: Fiber.RuntimeFiber<unknown, unknown> | null = null;
-    let idleMinuteCounter = 0;
-
     const interruptFiber = (
       fiber: Fiber.RuntimeFiber<unknown, unknown> | null,
     ) => {
       if (fiber !== null) Effect.runFork(Fiber.interrupt(fiber));
     };
 
-    const startWarningInterval = () => {
-      interruptFiber(warningFiber);
-      idleMinuteCounter = 0;
-      warningFiber = Effect.runFork(
+    // Idle phase: one loop drives both the periodic warnings and the fatal
+    // timeout from the same awake-time clock, so a host suspend neither kills
+    // the agent nor bursts out a backlog of warnings on wake.
+    const idleClock = createIdleClock({ now });
+    // Four samples per shortest deadline, so a deadline is met within a
+    // quarter of its length.
+    const idleTickMs =
+      Math.min(IDLE_TICK_MS, idleTimeoutMs, idleWarningIntervalMs) / 4;
+    const startIdleLoop = () =>
+      Effect.runFork(
         Effect.gen(function* () {
+          idleClock.reset();
+          let warnings = 0;
           while (true) {
-            yield* Effect.sleep(Duration.millis(idleWarningIntervalMs));
-            idleMinuteCounter++;
-            onIdleWarning(idleMinuteCounter);
+            yield* Effect.sleep(Duration.millis(idleTickMs));
+            const idleMs = idleClock.tick();
+            if (idleMs >= idleTimeoutMs) {
+              return yield* Deferred.fail(
+                timeoutSignal,
+                new AgentIdleTimeoutError({
+                  message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
+                  timeoutMs: idleTimeoutMs,
+                }),
+              );
+            }
+            while (idleMs >= (warnings + 1) * idleWarningIntervalMs) {
+              warnings += 1;
+              onIdleWarning(warnings);
+            }
           }
         }),
       );
-    };
 
     const resetTimer = () => {
       interruptFiber(timeoutFiber);
@@ -103,20 +123,7 @@ const invokeAgent = (
         );
       } else {
         // Pre-signal idle window — failure on expiry.
-        timeoutFiber = Effect.runFork(
-          Effect.gen(function* () {
-            yield* Effect.sleep(Duration.millis(idleTimeoutMs));
-            yield* Deferred.fail(
-              timeoutSignal,
-              new AgentIdleTimeoutError({
-                message: `Agent idle for ${idleTimeoutMs / 1000} seconds — no output received. Consider increasing the idle timeout with --idle-timeout.`,
-                timeoutMs: idleTimeoutMs,
-              }),
-            );
-          }),
-        );
-        // Reset warning interval on activity, idle-phase only.
-        startWarningInterval();
+        timeoutFiber = startIdleLoop();
       }
     };
 
@@ -179,8 +186,6 @@ const invokeAgent = (
             completionSignals.some((sig) => accumulatedOutput.includes(sig))
           ) {
             completionDetected = true;
-            interruptFiber(warningFiber);
-            warningFiber = null;
           }
           resetTimer();
         },
@@ -212,8 +217,6 @@ const invokeAgent = (
         Effect.sync(() => {
           interruptFiber(timeoutFiber);
           timeoutFiber = null;
-          interruptFiber(warningFiber);
-          warningFiber = null;
         }),
       ),
     );
@@ -236,8 +239,6 @@ const invokeAgent = (
           abortCleanup?.();
           interruptFiber(timeoutFiber);
           timeoutFiber = null;
-          interruptFiber(warningFiber);
-          warningFiber = null;
         }),
       ),
     );
@@ -271,6 +272,8 @@ export interface OrchestrateOptions {
   readonly name?: string;
   /** @internal Test-only override for the idle warning interval in milliseconds. Default: 60000 (1 minute). */
   readonly _idleWarningIntervalMs?: number;
+  /** @internal Test-only wall clock the idle timeout samples. Default: Date.now. */
+  readonly _now?: () => number;
   /** Resume a prior Claude Code session by ID. Applied to iteration 1 only. */
   readonly resumeSession?: string;
   /**
@@ -492,6 +495,7 @@ export const orchestrate = (
                   iterationResumeSession,
                   iterationForkSession,
                   options.signal,
+                  options._now,
                 );
 
                 // Flush any remaining buffered text deltas
