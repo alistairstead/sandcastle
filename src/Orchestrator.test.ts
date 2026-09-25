@@ -3984,6 +3984,49 @@ describe("Orchestrator completion timeout (hanging process)", () => {
     expect(result.iterations.length).toBe(1);
   }, 10_000);
 
+  it("does not count time the host spent suspended against the grace window", async () => {
+    const hostDir = await mkdtemp(join(tmpdir(), "orch-comp-suspend-"));
+    await initRepo(hostDir);
+    await commitFile(hostDir, "hello.txt", "hello", "initial commit");
+
+    const lines = [
+      JSON.stringify({
+        type: "result",
+        result: "All done. <promise>COMPLETE</promise>",
+      }),
+    ];
+
+    const { factoryLayer } = makeTestSandboxFactory(hostDir, (dir) =>
+      makeHangingClaudeAgentLayer(dir, lines),
+    );
+
+    // A 300ms grace window, with the wall clock leaping an hour on every
+    // read between 50ms and 350ms, as it would across a host suspend. Only
+    // awake time counts, so the window cannot close before ~650ms.
+    const start = Date.now();
+    let suspendedHours = 0;
+    const now = () => {
+      const elapsed = Date.now() - start;
+      if (elapsed > 50 && elapsed < 350) suspendedHours += 1;
+      return Date.now() + suspendedHours * 3_600_000;
+    };
+
+    const result = await Effect.runPromise(
+      orchestrate({
+        provider: testProvider,
+        hostRepoDir: hostDir,
+        iterations: 1,
+        prompt: "do some work",
+        completionTimeoutSeconds: 0.3,
+        idleTimeoutSeconds: 30,
+        _now: now,
+      }).pipe(Effect.provide(Layer.merge(factoryLayer, testDisplayLayer))),
+    );
+
+    expect(result.completionSignal).toBe("<promise>COMPLETE</promise>");
+    expect(Date.now() - start).toBeGreaterThanOrEqual(500);
+  }, 10_000);
+
   it("falls through to the idle timeout when the agent hangs WITHOUT emitting the signal", async () => {
     const hostDir = await mkdtemp(join(tmpdir(), "orch-comp-noidle-"));
     await initRepo(hostDir);

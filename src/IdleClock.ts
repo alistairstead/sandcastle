@@ -1,7 +1,9 @@
 /**
  * A gap between two ticks longer than this is taken to be the host suspending
- * (e.g. a laptop lid closing), not the agent going quiet. Ticks run at most a
- * second apart, so a healthy event loop never comes close.
+ * (e.g. a laptop lid closing), not the agent going quiet. The Orchestrator
+ * samples at least four times a second, so a healthy event loop never comes
+ * close. One blocked for longer has its gap dropped too, which only delays a
+ * timeout.
  */
 export const SUSPEND_THRESHOLD_MS = 10_000;
 

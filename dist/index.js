@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { NodeContext_exports, NodeFileSystem_exports, formatErrorMessage } from './chunk-JNJRL76J.js';
-import { Context_exports, CwdError, Effect_exports, resolveCwd, getCurrentBranch, generateTempBranchName, Layer_exports, FileDisplay, ClackDisplay, WorktreeDockerSandboxFactory, SandboxConfig, Display, pruneStale, create, copyToWorktree, runHostHooks, startSandbox, resolveGitMounts, patchGitMountsForWindows, SANDBOX_REPO_DIR, remove, makeSandboxFromHandle, syncOut, withSandboxLifecycle, hasUncommittedChanges, registerShutdown, SandboxFactory, PromptError, FileSystem_exports, SessionCaptureError, Clock_exports, Duration_exports, Option_exports, PromptExpansionTimeoutError, Deferred_exports, AgentError, Ref_exports, SilentDisplay, Fiber_exports, AgentIdleTimeoutError } from './chunk-XBH46AQY.js';
+import { Context_exports, CwdError, Effect_exports, resolveCwd, getCurrentBranch, generateTempBranchName, Layer_exports, FileDisplay, ClackDisplay, WorktreeDockerSandboxFactory, SandboxConfig, Display, pruneStale, create, copyToWorktree, runHostHooks, startSandbox, resolveGitMounts, patchGitMountsForWindows, SANDBOX_REPO_DIR, remove, makeSandboxFromHandle, syncOut, withSandboxLifecycle, hasUncommittedChanges, registerShutdown, SandboxFactory, PromptError, FileSystem_exports, SessionCaptureError, Clock_exports, Duration_exports, Option_exports, PromptExpansionTimeoutError, Deferred_exports, AgentError, Ref_exports, SilentDisplay, AgentIdleTimeoutError, Fiber_exports } from './chunk-XBH46AQY.js';
 export { createBindMountSandboxProvider, createIsolatedSandboxProvider } from './chunk-BIWNFKGV.js';
 import { noSandbox } from './chunk-62WN33RK.js';
 import './chunk-NGBM7T3E.js';
@@ -202,8 +202,26 @@ var TextDeltaBuffer = class {
 
 // src/Orchestrator.ts
 var IDLE_WARNING_INTERVAL_MS = 6e4;
-var IDLE_TICK_MS = 1e3;
-var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, completionTimeoutMs, completionSignals, onText, onToolCall, onRawLine, onIdleWarning, onCompletionTimeout, idleWarningIntervalMs = IDLE_WARNING_INTERVAL_MS, resumeSession, forkSession, signal, now) => Effect_exports.gen(function* () {
+var MAX_TICK_MS = 1e3;
+var invokeAgent = ({
+  sandbox,
+  sandboxRepoDir,
+  prompt,
+  provider,
+  idleTimeoutMs,
+  completionTimeoutMs,
+  completionSignals,
+  onText,
+  onToolCall,
+  onRawLine,
+  onIdleWarning,
+  onCompletionTimeout,
+  idleWarningIntervalMs = IDLE_WARNING_INTERVAL_MS,
+  resumeSession,
+  forkSession,
+  signal,
+  now
+}) => Effect_exports.gen(function* () {
   let resultText = "";
   let sessionId;
   let usage;
@@ -215,37 +233,32 @@ var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, com
   const interruptFiber = (fiber) => {
     if (fiber !== null) Effect_exports.runFork(Fiber_exports.interrupt(fiber));
   };
-  const idleClock = createIdleClock({ now });
-  const idleTickMs = Math.min(IDLE_TICK_MS, idleTimeoutMs, idleWarningIntervalMs) / 4;
-  const startIdleLoop = () => Effect_exports.runFork(
+  const quietClock = createIdleClock({ now });
+  const tickMs = Math.min(
+    MAX_TICK_MS,
+    idleTimeoutMs,
+    completionTimeoutMs,
+    idleWarningIntervalMs
+  ) / 4;
+  const startQuietTimer = (timer) => Effect_exports.runFork(
     Effect_exports.gen(function* () {
-      idleClock.reset();
-      let warnings = 0;
+      quietClock.reset();
       while (true) {
-        yield* Effect_exports.sleep(Duration_exports.millis(idleTickMs));
-        const idleMs = idleClock.tick();
-        if (idleMs >= idleTimeoutMs) {
-          return yield* Deferred_exports.fail(
-            timeoutSignal,
-            new AgentIdleTimeoutError({
-              message: `Agent idle for ${idleTimeoutMs / 1e3} seconds \u2014 no output received. Consider increasing the idle timeout with --idle-timeout.`,
-              timeoutMs: idleTimeoutMs
-            })
-          );
+        yield* Effect_exports.sleep(Duration_exports.millis(tickMs));
+        const quietMs = quietClock.tick();
+        if (quietMs >= timer.limitMs) {
+          return yield* timer.onExpire;
         }
-        while (idleMs >= (warnings + 1) * idleWarningIntervalMs) {
-          warnings += 1;
-          onIdleWarning(warnings);
-        }
+        timer.onQuiet?.(quietMs);
       }
     })
   );
   const resetTimer = () => {
     interruptFiber(timeoutFiber);
     if (completionDetected) {
-      timeoutFiber = Effect_exports.runFork(
-        Effect_exports.gen(function* () {
-          yield* Effect_exports.sleep(Duration_exports.millis(completionTimeoutMs));
+      timeoutFiber = startQuietTimer({
+        limitMs: completionTimeoutMs,
+        onExpire: Effect_exports.gen(function* () {
           onCompletionTimeout(completionTimeoutMs);
           yield* Deferred_exports.succeed(completionTimeoutDeferred, {
             result: resultText || accumulatedOutput,
@@ -253,9 +266,25 @@ var invokeAgent = (sandbox, sandboxRepoDir, prompt, provider, idleTimeoutMs, com
             usage
           });
         })
-      );
+      });
     } else {
-      timeoutFiber = startIdleLoop();
+      let warnings = 0;
+      timeoutFiber = startQuietTimer({
+        limitMs: idleTimeoutMs,
+        onQuiet: (quietMs) => {
+          while (quietMs >= (warnings + 1) * idleWarningIntervalMs) {
+            warnings += 1;
+            onIdleWarning(warnings);
+          }
+        },
+        onExpire: Deferred_exports.fail(
+          timeoutSignal,
+          new AgentIdleTimeoutError({
+            message: `Agent idle for ${idleTimeoutMs / 1e3} seconds \u2014 no output received. Consider increasing the idle timeout with --idle-timeout.`,
+            timeoutMs: idleTimeoutMs
+          })
+        )
+      });
     }
   };
   const abortDeferred = yield* Deferred_exports.make();
@@ -472,10 +501,10 @@ var orchestrate = (options) => {
               result: agentOutput,
               sessionId,
               usage: streamUsage
-            } = yield* invokeAgent(
-              ctx.sandbox,
-              ctx.sandboxRepoDir,
-              fullPrompt,
+            } = yield* invokeAgent({
+              sandbox: ctx.sandbox,
+              sandboxRepoDir: ctx.sandboxRepoDir,
+              prompt: fullPrompt,
               provider,
               idleTimeoutMs,
               completionTimeoutMs,
@@ -485,12 +514,12 @@ var orchestrate = (options) => {
               onRawLine,
               onIdleWarning,
               onCompletionTimeout,
-              options._idleWarningIntervalMs,
-              iterationResumeSession,
-              iterationForkSession,
-              options.signal,
-              options._now
-            );
+              idleWarningIntervalMs: options._idleWarningIntervalMs,
+              resumeSession: iterationResumeSession,
+              forkSession: iterationForkSession,
+              signal: options.signal,
+              now: options._now
+            });
             textBuffer.dispose();
             yield* display.status(label("Agent stopped"), "info");
             let sessionFilePath;
